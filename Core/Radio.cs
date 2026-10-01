@@ -20,7 +20,8 @@ namespace XorWoWLauncher.Core
     /// ("XorWoW.exe --radio &lt;game pid&gt;", no window) that ends with the game.
     ///
     /// The addon keeps what it wants in a global, XorWoWRadioState = 2000 x keep playing in the
-    /// background (0/1) + 1000 x playing (0/1) + volume (0-100), which the helper reads from the
+    /// background (0/1) + 1000 x playing (0/1) + volume (0-100, a fraction too: the radio's own
+    /// volume already scaled by the game's master volume), which the helper reads from the
     /// game's memory twice a second (GameLua) - without the background flag the radio is muted while
     /// another window is in front or the game is minimized: nothing on
     /// screen, any window mode, minimized or covered. It acts on a state that differs from the last
@@ -73,9 +74,9 @@ namespace XorWoWLauncher.Core
         Forms.ToolStripMenuItem _titleItem, _playItem;
 
         bool _playing;
-        int _volume = 50;
+        double _volume = 50;   // percent, already scaled by the game's master volume - fractions too
         string _title;
-        (bool on, int volume)? _acted;
+        (bool on, double volume)? _acted;
         DateTime _bufferingSince = DateTime.MaxValue, _nextTitle = DateTime.MinValue;
         readonly GameLua _lua;
         bool _stateSeen, _keepInBackground;
@@ -120,11 +121,11 @@ namespace XorWoWLauncher.Core
             {
                 if (!_stateSeen) { _stateSeen = true; Log.Write("radio: reading the addon's state"); }
                 _keepInBackground = state >= 2000;
-                var rest = (int)state % 2000;
-                var read = (on: rest >= 1000, volume: rest % 1000);
+                var rest = state - (_keepInBackground ? 2000 : 0);
+                var read = (on: rest >= 1000, volume: Math.Round(rest - (rest >= 1000 ? 1000 : 0), 2));
                 if (_acted != read)
                 {
-                    if (_acted != null) Log.Write($"radio: the game asks for {(read.on ? "play" : "stop")} at {read.volume}% (state {state})");
+                    if (_acted != null) Log.Write($"radio: the game asks for {(read.on ? "play" : "stop")} at {read.volume:0.##}% (state {state})");
                     _acted = read;
                     SetVolume(read.volume);
                     if (read.on != _playing) { if (read.on) Play(); else Stop(); }
@@ -156,7 +157,7 @@ namespace XorWoWLauncher.Core
             _playing = true;
             Connect();
             _nextTitle = DateTime.MinValue;
-            Log.Write($"radio: playing (volume {_volume}%)");
+            Log.Write($"radio: playing (volume {_volume:0.##}%)");
             UpdateTray();
         }
 
@@ -206,7 +207,7 @@ namespace XorWoWLauncher.Core
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out int pid);
 
-        void SetVolume(int volume)
+        void SetVolume(double volume)
         {
             _volume = Math.Max(0, Math.Min(100, volume));
             if (_player != null) _player.Volume = _volume / 100.0;
@@ -259,7 +260,7 @@ namespace XorWoWLauncher.Core
                 }
                 volume.DropDownOpening += (s, e) =>
                 {
-                    foreach (Forms.ToolStripMenuItem item in volume.DropDownItems) item.Checked = item.Text == _volume + "%";
+                    foreach (Forms.ToolStripMenuItem item in volume.DropDownItems) item.Checked = Math.Abs(_volume - double.Parse(item.Text.TrimEnd('%'))) < 0.5;
                 };
                 menu.Items.Add(_titleItem);
                 menu.Items.Add(new Forms.ToolStripSeparator());
@@ -278,7 +279,7 @@ namespace XorWoWLauncher.Core
             var state = _playing ? (_title ?? Station) : "Stopped";
             _titleItem.Text = _playing && _title != null ? _title : Station;
             _playItem.Text = _playing ? "Stop" : "Play";
-            _tray.Text = Clip($"XorWoW Radio ({_volume}%)\n{state}", 63);   // NotifyIcon refuses more than 63 characters
+            _tray.Text = Clip($"XorWoW Radio ({_volume:0.#}%)\n{state}", 63);   // NotifyIcon refuses more than 63 characters
         }
 
         static Icon AppIcon()
