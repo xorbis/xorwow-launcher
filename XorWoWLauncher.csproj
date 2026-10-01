@@ -1,0 +1,52 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- .NET Framework 4.8 ships with every Windows 10/11, so the launcher is one exe with nothing
+       to install. Built by scripts\build-launcher.ps1 (dotnet SDK 8). -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>XorWoW</AssemblyName>
+    <RootNamespace>XorWoWLauncher</RootNamespace>
+    <ApplicationIcon>Assets\xorwow.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.2.1</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Product>XorWoW Launcher</Product>
+    <Company>XorWoW</Company>
+    <Description>XorWoW Launcher</Description>
+    <Copyright>XorWoW</Copyright>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <!-- Windows.Media.Playback for the radio (Core\Radio.cs): reference assemblies only, the API
+       itself is part of Windows 10/11, nothing is copied next to the exe -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\logo.png" />
+    <Resource Include="Assets\xorwow.ico" />
+    <Resource Include="Assets\Cinzel-Bold.ttf" />
+    <EmbeddedResource Include="Assets\signing-key.public.xml" LogicalName="signing-key.public.xml" />
+  </ItemGroup>
+
+</Project>
+
