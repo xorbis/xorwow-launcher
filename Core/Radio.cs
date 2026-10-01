@@ -68,6 +68,7 @@ namespace XorWoWLauncher.Core
         readonly DispatcherTimer _timer;
         readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         MediaPlayer _player;
+        MediaSource _source;
         Forms.NotifyIcon _tray;
         Forms.ToolStripMenuItem _titleItem, _playItem;
 
@@ -99,7 +100,7 @@ namespace XorWoWLauncher.Core
         {
             _timer.Stop();
             Stop();
-            _player?.Dispose();
+            Disconnect();
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
             _http.Dispose();
             _lua.Dispose();
@@ -123,13 +124,14 @@ namespace XorWoWLauncher.Core
                 var read = (on: rest >= 1000, volume: rest % 1000);
                 if (_acted != read)
                 {
+                    if (_acted != null) Log.Write($"radio: the game asks for {(read.on ? "play" : "stop")} at {read.volume}% (state {state})");
                     _acted = read;
                     SetVolume(read.volume);
                     if (read.on != _playing) { if (read.on) Play(); else Stop(); }
                 }
             }
 
-            if (_playing)
+            if (_playing && _player != null)
             {
                 // quiet while another window is in front (or the game is minimized), unless the addon
                 // says to keep playing: a mute, not a pause, so it comes back live and at once
@@ -151,25 +153,38 @@ namespace XorWoWLauncher.Core
 
         void Play()
         {
-            if (_player == null)
-            {
-                _player = new MediaPlayer { AudioCategory = MediaPlayerAudioCategory.Media };
-                _player.CommandManager.IsEnabled = false;   // no media overlay / media keys: the game owns play and stop
-                _player.MediaFailed += (s, e) => _ui.BeginInvoke(new Action(() => OnFailed(e.Error + " " + e.ErrorMessage)));
-            }
             _playing = true;
-            _player.Volume = _volume / 100.0;
             Connect();
             _nextTitle = DateTime.MinValue;
             Log.Write($"radio: playing (volume {_volume}%)");
             UpdateTray();
         }
 
+        /// <summary>
+        /// A new player on a new connection, every time: swapping only the source left the old
+        /// connections open (three at once, seen 2026-09-30) and the player stuck buffering for good.
+        /// </summary>
         void Connect()
         {
+            Disconnect();
             _bufferingSince = DateTime.MaxValue;
-            _player.Source = MediaSource.CreateFromUri(new Uri(StreamUrl));
-            _player.Play();
+            var player = new MediaPlayer { AudioCategory = MediaPlayerAudioCategory.Media, Volume = _volume / 100.0 };
+            player.CommandManager.IsEnabled = false;   // no media overlay / media keys: the game owns play and stop
+            player.MediaFailed += (s, e) => _ui.BeginInvoke(new Action(() => { if (s == _player) OnFailed(e.Error + " " + e.ErrorMessage); }));
+            _source = MediaSource.CreateFromUri(new Uri(StreamUrl));
+            player.Source = _source;
+            _player = player;
+            player.Play();
+        }
+
+        void Disconnect()
+        {
+            if (_player == null) return;
+            try { _player.Pause(); _player.Source = null; } catch { }
+            try { _source?.Dispose(); } catch { }
+            try { _player.Dispose(); } catch { }
+            _player = null;
+            _source = null;
         }
 
         void Stop()
@@ -177,8 +192,7 @@ namespace XorWoWLauncher.Core
             if (!_playing) return;
             _playing = false;
             _title = null;
-            _player.Pause();
-            _player.Source = null;   // a live stream: drop the connection, the next play starts live again
+            Disconnect();   // a live stream: drop the connection, the next play starts live again
             Log.Write("radio: stopped");
             UpdateTray();
         }
