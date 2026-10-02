@@ -617,7 +617,7 @@ namespace XorWoWLauncher
             Directory.CreateDirectory(wtf);
             var cfg = System.IO.Path.Combine(wtf, "Config.wtf");
             var lines = File.Exists(cfg) ? File.ReadAllLines(cfg).ToList() : new List<string>();
-            var changed = SetCVar(lines, "accountName", _account, true);
+            var changed = SetCVar(lines, "accountName", _account.ToLowerInvariant(), true);
             changed |= SetCVar(lines, "readEULA", "1", false);
             changed |= SetCVar(lines, "readTOS", "1", false);
             changed |= SetCVar(lines, "realmName", "XorWoW", false);
