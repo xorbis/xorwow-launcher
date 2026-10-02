@@ -31,6 +31,8 @@ namespace XorWoWLauncher
                 return;
             }
 
+            // Before the settings: the launcher being closed may still write them on its way out
+            SingleInstance.Claim();
             Settings = Core.Settings.Load();
             UninstallMode = e.Args.Any(a => a.Equals(Uninstaller.Flag, StringComparison.OrdinalIgnoreCase));
             var moved = Array.FindIndex(e.Args, a => a.Equals(MovedFromFlag, StringComparison.OrdinalIgnoreCase));
