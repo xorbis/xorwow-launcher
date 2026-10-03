@@ -25,6 +25,15 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <!-- Realm the launcher logs into until the player picks another: -p:XorWoWServer=host, or a
+       Directory.Build.props above launcher\ (XorWoW's own build keeps its address there). -->
+  <PropertyGroup>
+    <XorWoWServer Condition="'$(XorWoWServer)' == ''">127.0.0.1</XorWoWServer>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="DefaultServer" Value="$(XorWoWServer)" />
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />

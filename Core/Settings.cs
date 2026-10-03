@@ -25,7 +25,8 @@ namespace XorWoWLauncher.Core
 
     public sealed class Settings
     {
-        public const string DefaultServer = "127.0.0.1";
+        /// <summary>Set at build time (XorWoWServer in XorWoWLauncher.csproj), 127.0.0.1 when the build names none.</summary>
+        public static readonly string DefaultServer = BuildMetadata("DefaultServer") ?? "127.0.0.1";
         public const int AuthPort = 3724;
         public const string DefaultFiles = "https://dailywar.online/downloads/xorwow/";
 
@@ -47,7 +48,17 @@ namespace XorWoWLauncher.Core
         public string FilesBase => string.IsNullOrWhiteSpace(Files) ? DefaultFiles : Files.Trim();
         public string AuthHost => string.IsNullOrWhiteSpace(Server) ? DefaultServer : Server.Trim();
 
-        static readonly byte[] Entropy = Encoding.UTF8.GetBytes("XorWoW Launcher credential v1");
+        static string BuildMetadata(string key)
+        {
+            foreach (var a in typeof(Settings).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+            {
+                var m = (System.Reflection.AssemblyMetadataAttribute)a;
+                if (m.Key == key && !string.IsNullOrWhiteSpace(m.Value)) return m.Value.Trim();
+            }
+            return null;
+        }
+
+        static readonly byte[] Entropy =Encoding.UTF8.GetBytes("XorWoW Launcher credential v1");
 
         public byte[] LoadCredential()
         {
