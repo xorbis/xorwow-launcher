@@ -18,7 +18,7 @@ namespace XorWoWLauncher.Core
     /// model is the template's name with 0000 = n.
     ///
     /// The tabard is the client's own guild emblem pieces (Textures\GuildEmblems): the background
-    /// colour dyes the plain cloth, the border and emblem go on top. Each piece is half a tabard front
+    /// colour dyes the plain cloth, the border's band runs along the cloth's outline (Patch-Z's trim map), the emblem goes large in the middle. Each piece is half a tabard front
     /// (the character model mirrors it around the chest's centre line), so it is mirrored back whole.
     /// A guild seen for the first time, or a new design, shows at the next start through the launcher.
     /// </summary>
@@ -75,9 +75,9 @@ namespace XorWoWLauncher.Core
         {
             var manifest = chain.Read(ManifestName);
             if (manifest == null) { Log.Write("guild banners: the realm's patch has no " + ManifestName); return null; }
-            string texture = null;
+            string texture = null, trim = null;
             int slots = 0;
-            int[] design = { 0, 24, 256, 192 };
+            var layout = new Layout();
             var models = new List<string>();
             foreach (var raw in Encoding.ASCII.GetString(manifest).Split('\n'))
             {
@@ -88,12 +88,19 @@ namespace XorWoWLauncher.Core
                 var value = sp < 0 ? "" : line.Substring(sp + 1).Trim();
                 if (key == "texture") texture = value;
                 else if (key == "slots") slots = int.Parse(value);
-                else if (key == "design") design = value.Split(' ').Select(int.Parse).ToArray();
+                else if (key == "trim") trim = value;
+                else if (key == "band") layout.Band = value.Split(' ').Select(int.Parse).ToArray();
+                else if (key == "emblem") layout.Emblem = value.Split(' ').Select(int.Parse).ToArray();
                 else if (key == "model") models.Add(value);
             }
             var clothData = texture == null ? null : chain.Read(texture);
             if (clothData == null) { Log.Write("guild banners: no template texture " + texture); return null; }
             var cloth = Blp.Decode(clothData);
+            var trimData = trim == null ? null : chain.Read(trim);
+            if (trimData != null && Encoding.ASCII.GetString(trimData, 0, 4) == "XWTR"
+                && BitConverter.ToUInt16(trimData, 4) == cloth.W && BitConverter.ToUInt16(trimData, 6) == cloth.H)
+                layout.Trim = trimData;
+            else Log.Write("guild banners: no trim map, the banners go without their border");
 
             var files = new Dictionary<string, byte[]>();
             foreach (var kv in designs.OrderBy(k => k.Key))
@@ -101,7 +108,7 @@ namespace XorWoWLauncher.Core
                 int guild = kv.Key;
                 if (guild < 1 || guild > slots) continue;
                 var slot = guild.ToString("D4");
-                files[Slot(texture, slot)] = Blp.EncodeDxt5(Paint(chain, cloth, kv.Value, design));
+                files[Slot(texture, slot)] = Blp.EncodeDxt5(Paint(chain, cloth, kv.Value, layout));
                 foreach (var model in models)
                 {
                     var m2 = chain.Read(model);
@@ -143,8 +150,8 @@ namespace XorWoWLauncher.Core
 
         // ------------------------------------------------------------------ painting
 
-        /// <summary>The cloth dyed in the guild's background colour, its border and emblem on top.</summary>
-        static Image Paint(ArchiveChain chain, Image cloth, int[] d, int[] rect)
+        /// <summary>The cloth dyed in the guild's background colour, its border along the cloth's edges and its emblem on top.</summary>
+        static Image Paint(ArchiveChain chain, Image cloth, int[] d, Layout layout)
         {
             int style = d[0], color = d[1], border = d[2], borderColor = d[3], background = d[4];
             int w = cloth.W, h = cloth.H;
@@ -167,40 +174,135 @@ namespace XorWoWLauncher.Core
                 output.Px[i * 4 + 3] = cloth.Px[i * 4 + 3];
             }
 
-            var front = new Image(128, 96);
-            foreach (var kind in new[] { $"Border_{border:D2}_{borderColor:D2}", $"Emblem_{style:D2}_{color:D2}" })
+            // the border: the tabard border's band, run along the cloth's outline (the trim map)
+            var strip = layout.Trim == null ? null : BorderStrip(Front(chain, $"Border_{border:D2}_{borderColor:D2}"));
+            if (strip != null)
             {
-                var upper = Piece(chain, kind + "_TU_U.blp");
-                var lower = Piece(chain, kind + "_TL_U.blp");
-                if (upper == null || lower == null) continue;   // a design the client has no art for: left out, as on a tabard
-                for (int y = 0; y < 96; y++)
-                    for (int x = 0; x < 64; x++)
+                int inset = layout.Band[0], band = layout.Band[1];
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
                     {
-                        var src = y < 64 ? upper : lower;
-                        int sy = y < 64 ? y : y - 64;
-                        if (x >= src.W || sy >= src.H) continue;
-                        int s = (sy * src.W + x) * 4;
-                        Over(front, 64 + x, y, src.Px, s);
-                        Over(front, 63 - x, y, src.Px, s);
+                        int i = y * w + x;
+                        if (cloth.Px[i * 4 + 3] <= 128) continue;
+                        float across = (layout.Trim[8 + i] / 8f - inset) / band;
+                        if (across < 0 || across >= 1) continue;
+                        int along = layout.Trim[8 + w * h + i] != 0 ? y : x;
+                        int sx = Math.Min(strip.W - 1, (int)(across * strip.W));
+                        int sy = (int)(along * strip.H / (band * 2.5f)) % strip.H;
+                        Blend(output, i, strip.Px, (sy * strip.W + sx) * 4, shade[i]);
                     }
             }
 
-            // the tabard front scaled onto the cloth (bilinear, premultiplied), in the cloth's folds
-            int rx = rect[0], ry = rect[1], rw = rect[2], rh = rect[3];
-            for (int y = 0; y < rh; y++)
-                for (int x = 0; x < rw; x++)
-                {
-                    int ox = rx + x, oy = ry + y;
-                    if (ox < 0 || oy < 0 || ox >= w || oy >= h) continue;
-                    var p = Sample(front, (x + 0.5f) * front.W / rw - 0.5f, (y + 0.5f) * front.H / rh - 0.5f);
-                    float a = p[3];
-                    if (a <= 0) continue;
-                    int o = (oy * w + ox) * 4;
-                    float s = Math.Min(Math.Max(shade[oy * w + ox], 0), 1.4f);
-                    for (int c = 0; c < 3; c++)
-                        output.Px[o + c] = Clamp(output.Px[o + c] * (1 - a) + p[c] * 255 * s);
-                }
+            // the emblem, whole, as large as it fits in its box, in the cloth's folds
+            var emblem = Front(chain, $"Emblem_{style:D2}_{color:D2}");
+            var box = emblem == null ? null : Opaque(emblem);
+            if (box != null)
+            {
+                int bx = box[0], by = box[1], bw = box[2], bh = box[3];
+                float scale = Math.Min(layout.Emblem[2] / (float)bw, layout.Emblem[3] / (float)bh);
+                int ew = Math.Max(1, (int)(bw * scale)), eh = Math.Max(1, (int)(bh * scale));
+                int x0 = layout.Emblem[0] - ew / 2, y0 = layout.Emblem[1] - eh / 2;
+                for (int y = 0; y < eh; y++)
+                    for (int x = 0; x < ew; x++)
+                    {
+                        int ox = x0 + x, oy = y0 + y;
+                        if (ox < 0 || oy < 0 || ox >= w || oy >= h) continue;
+                        var p = Sample(emblem, bx + (x + 0.5f) / scale - 0.5f, by + (y + 0.5f) / scale - 0.5f);
+                        if (p[3] <= 0) continue;
+                        int o = (oy * w + ox) * 4;
+                        float s = Math.Min(Math.Max(shade[oy * w + ox], 0), 1.4f);
+                        for (int c = 0; c < 3; c++)
+                            output.Px[o + c] = Clamp(output.Px[o + c] * (1 - p[3]) + p[c] * 255 * s);
+                    }
+            }
             return output;
+        }
+
+        sealed class Layout
+        {
+            public int[] Band = { 1, 11 };                // trim inset and width, texels
+            public int[] Emblem = { 128, 140, 150, 130 };  // centre x, y, largest width, height
+            public byte[] Trim;                            // GuildBannerTrim.bin (build.py banner_trim_map)
+        }
+
+        /// <summary>A tabard piece pair made whole (128 x 96): each is the left half of a tabard front, the
+        /// centre line at its x = 0, mirrored on the model. Null when the client has no art for it (a design
+        /// out of range: left out, as on a tabard).</summary>
+        static Image Front(ArchiveChain chain, string kind)
+        {
+            var upper = Piece(chain, kind + "_TU_U.blp");
+            var lower = Piece(chain, kind + "_TL_U.blp");
+            if (upper == null || lower == null) return null;
+            var front = new Image(128, 96);
+            for (int y = 0; y < 96; y++)
+                for (int x = 0; x < 64; x++)
+                {
+                    var src = y < 64 ? upper : lower;
+                    int sy = y < 64 ? y : y - 64;
+                    if (x >= src.W || sy >= src.H) continue;
+                    int s = (sy * src.W + x) * 4;
+                    Over(front, 64 + x, y, src.Px, s);
+                    Over(front, 63 - x, y, src.Px, s);
+                }
+            return front;
+        }
+
+        /// <summary>The bounds (x, y, width, height) of what is visible in the image, or null.</summary>
+        static int[] Opaque(Image img)
+        {
+            int x0 = img.W, y0 = img.H, x1 = -1, y1 = -1;
+            for (int y = 0; y < img.H; y++)
+                for (int x = 0; x < img.W; x++)
+                    if (img.Px[(y * img.W + x) * 4 + 3] > 20) { x0 = Math.Min(x0, x); y0 = Math.Min(y0, y); x1 = Math.Max(x1, x); y1 = Math.Max(y1, y); }
+            return x1 < 0 ? null : new[] { x0, y0, x1 - x0 + 1, y1 - y0 + 1 };
+        }
+
+        /// <summary>The border's band as a strip (rows along it, columns across, outer edge first): in the
+        /// lower part of the tabard (rows 64..95) the band hangs straight down; each row's widest opaque run
+        /// left of the centre line, stretched to their usual width.</summary>
+        static Image BorderStrip(Image front)
+        {
+            if (front == null) return null;
+            var rows = new List<(int start, int end, int y)>();
+            for (int y = 64; y < 96; y++)
+            {
+                int best = -1, bestEnd = -1;
+                for (int x = 0; x < 64;)
+                {
+                    if (front.Px[(y * front.W + x) * 4 + 3] <= 100) { x++; continue; }
+                    int s = x;
+                    while (x < 64 && front.Px[(y * front.W + x) * 4 + 3] > 100) x++;
+                    if (x - s > bestEnd - best) { best = s; bestEnd = x; }
+                }
+                if (bestEnd - best >= 3) rows.Add((best, bestEnd, y));
+            }
+            if (rows.Count == 0) return null;
+            var widths = rows.Select(r => r.end - r.start).OrderBy(v => v).ToList();
+            int width = widths[widths.Count / 2];
+            var strip = new Image(width, rows.Count);
+            for (int r = 0; r < rows.Count; r++)
+            {
+                var (start, end, y) = rows[r];
+                for (int x = 0; x < width; x++)
+                {
+                    float f = start + (x + 0.5f) * (end - start) / width - 0.5f;
+                    int a = Math.Max(start, Math.Min(end - 1, (int)Math.Floor(f))), b = Math.Min(end - 1, a + 1);
+                    float t = Math.Max(0, Math.Min(1, f - a));
+                    for (int c = 0; c < 4; c++)
+                        strip.Px[(r * width + x) * 4 + c] = Clamp(front.Px[(y * front.W + a) * 4 + c] * (1 - t) + front.Px[(y * front.W + b) * 4 + c] * t);
+                }
+            }
+            return strip;
+        }
+
+        /// <summary>A texel of art over the output, darkened or lit by the cloth's folds.</summary>
+        static void Blend(Image output, int i, byte[] src, int s, float shade)
+        {
+            float a = src[s + 3] / 255f;
+            if (a <= 0) return;
+            float lit = Math.Min(Math.Max(shade, 0), 1.4f);
+            for (int c = 0; c < 3; c++)
+                output.Px[i * 4 + c] = Clamp(output.Px[i * 4 + c] * (1 - a) + src[s + c] * lit * a);
         }
 
         static Image Piece(ArchiveChain chain, string name)
