@@ -560,6 +560,7 @@ namespace XorWoWLauncher
             var exe = System.IO.Path.Combine(dir, "Wow.exe");
             if (!File.Exists(exe)) { Status("Wow.exe is missing - press \"Check for updates\".", Danger); return; }
             try { PrepareGameConfig(dir); } catch (Exception ex) { Log.Write("Config.wtf: " + ex.Message); }
+            GuildBanners.Update(dir);   // the guild hall banners' textures (Data\Patch-Y.MPQ)
             Process wow;
             try
             {

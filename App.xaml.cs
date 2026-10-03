@@ -31,6 +31,15 @@ namespace XorWoWLauncher
                 return;
             }
 
+            // "--guild-banners <game folder>": writes the guild banners' Patch-Y.MPQ as Play does, and exits (tests)
+            var banners = Array.FindIndex(e.Args, a => a.Equals("--guild-banners", StringComparison.OrdinalIgnoreCase));
+            if (banners >= 0 && banners + 1 < e.Args.Length)
+            {
+                GuildBanners.Update(e.Args[banners + 1]);
+                Shutdown();
+                return;
+            }
+
             // Before the settings: the launcher being closed may still write them on its way out
             SingleInstance.Claim();
             Settings = Core.Settings.Load();
