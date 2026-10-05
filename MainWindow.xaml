@@ -9,7 +9,8 @@
         Background="{StaticResource Bg0}"
         Foreground="{StaticResource Text}"
         FontFamily="Segoe UI" FontSize="13"
-        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
+        KeyDown="Window_KeyDown">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="36" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" />

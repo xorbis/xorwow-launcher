@@ -554,6 +554,16 @@ namespace XorWoWLauncher
 
         // ================================================================ play
 
+        // Enter on the main view plays, unless a text field (addon search, server address) or a button took it
+        void Window_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Handled || e.Key != Key.Enter || e.IsRepeat) return;
+            if (MainView.Visibility != Visibility.Visible || !PlayButton.IsEnabled) return;
+            if (e.OriginalSource is System.Windows.Controls.Primitives.TextBoxBase || e.OriginalSource is PasswordBox) return;
+            e.Handled = true;
+            Play_Click(PlayButton, new RoutedEventArgs());
+        }
+
         void Play_Click(object sender, RoutedEventArgs e)
         {
             var dir = _settings.GameDir;
