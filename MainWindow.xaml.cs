@@ -481,6 +481,101 @@ namespace XorWoWLauncher
             catch (Exception ex) when (!(ex is OperationCanceledException)) { Log.Write("notes: " + ex.Message); }
         }
 
+        // A release note card was clicked: the whole note in the detail view, its write-up then (addons) the change list
+        void Note_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (!((sender as FrameworkElement)?.DataContext is NoteItem n)) return;
+            NoteKind.Text = (n.Kind == "Server" ? "SERVER UPDATE" : "XORWOW ADDONS") + "   ·   " + n.When;
+            NoteTitle.Text = n.Title;
+            NoteBody.Children.Clear();
+            if (n.HasDetails) RenderNoteMarkup(n.Details);
+            if (n.Kind == "Addons" && n.HasBody)
+            {
+                if (n.HasDetails) NoteBody.Children.Add(NoteHeading("Changes"));
+                foreach (var line in n.Body.Split('\n'))
+                {
+                    if (line.StartsWith("•")) NoteBody.Children.Add(NoteBullet(line.TrimStart('•', ' '), 0));
+                    else NoteBody.Children.Add(NoteParagraph(line));
+                }
+            }
+            if (NoteBody.Children.Count == 0)
+                NoteBody.Children.Add(new TextBlock { Text = "No further details for this update.", Style = (Style)FindResource("Dim") });
+            NoteScroll.ScrollToTop();
+            NoteLayer.Visibility = Visibility.Visible;
+            e.Handled = true;
+        }
+
+        void NoteClose_Click(object sender, RoutedEventArgs e) => NoteLayer.Visibility = Visibility.Collapsed;
+
+        // A click on the dimmed backdrop, outside the panel, closes the note
+        void NoteLayer_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (ReferenceEquals(e.OriginalSource, NoteLayer)) NoteLayer.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>The details' markup: "## "/"### " headings, "- "/"* " bullets (two spaces of indent per
+        /// level), blank lines between paragraphs, **bold** inline. Lines of a paragraph are joined.</summary>
+        void RenderNoteMarkup(string text)
+        {
+            var para = new List<string>();
+            void Flush() { if (para.Count > 0) { NoteBody.Children.Add(NoteParagraph(string.Join(" ", para))); para.Clear(); } }
+            foreach (var raw in text.Replace("\r", "").Split('\n'))
+            {
+                var trimmed = raw.Trim();
+                if (trimmed.Length == 0) { Flush(); continue; }
+                if (trimmed.StartsWith("#")) { Flush(); NoteBody.Children.Add(NoteHeading(trimmed.TrimStart('#').Trim())); continue; }
+                if (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
+                {
+                    Flush();
+                    var indent = raw.Length - raw.TrimStart(' ').Length;
+                    NoteBody.Children.Add(NoteBullet(trimmed.Substring(2).Trim(), indent / 2));
+                    continue;
+                }
+                para.Add(trimmed);
+            }
+            Flush();
+        }
+
+        TextBlock NoteHeading(string text) => new TextBlock
+        {
+            Text = text, Style = (Style)FindResource("H2"), FontSize = 14,
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 6),
+        };
+
+        TextBlock NoteParagraph(string text)
+        {
+            var t = new TextBlock { Foreground = (Brush)FindResource("Text"), TextWrapping = TextWrapping.Wrap, LineHeight = 20, Margin = new Thickness(0, 0, 0, 8) };
+            AddNoteInlines(t, text);
+            return t;
+        }
+
+        FrameworkElement NoteBullet(string text, int level)
+        {
+            var g = new Grid { Margin = new Thickness(4 + level * 18, 0, 0, 5) };
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.Children.Add(new TextBlock { Text = level == 0 ? "•" : "◦", Foreground = (Brush)FindResource("Ice"), LineHeight = 20 });
+            var t = new TextBlock { Foreground = (Brush)FindResource("Text"), TextWrapping = TextWrapping.Wrap, LineHeight = 20 };
+            AddNoteInlines(t, text);
+            Grid.SetColumn(t, 1);
+            g.Children.Add(t);
+            return g;
+        }
+
+        // **bold** spans; an odd "**" is left as written
+        void AddNoteInlines(TextBlock t, string text)
+        {
+            var parts = text.Split(new[] { "**" }, StringSplitOptions.None);
+            if (parts.Length % 2 == 0) { t.Text = text; return; }
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (parts[i].Length == 0) continue;
+                var run = new System.Windows.Documents.Run(parts[i]);
+                if (i % 2 == 1) { run.FontWeight = FontWeights.SemiBold; run.Foreground = (Brush)FindResource("IceBright"); }
+                t.Inlines.Add(run);
+            }
+        }
+
         void SetBusy(bool busy)
         {
             _busy = busy;
@@ -557,6 +652,11 @@ namespace XorWoWLauncher
         // Enter on the main view plays, unless a text field (addon search, server address) or a button took it
         void Window_KeyDown(object sender, KeyEventArgs e)
         {
+            if (NoteLayer.Visibility == Visibility.Visible)
+            {
+                if (e.Key == Key.Escape || e.Key == Key.Enter) { NoteLayer.Visibility = Visibility.Collapsed; e.Handled = true; }
+                return;
+            }
             if (e.Handled || e.Key != Key.Enter || e.IsRepeat) return;
             if (MainView.Visibility != Visibility.Visible || !PlayButton.IsEnabled) return;
             if (e.OriginalSource is System.Windows.Controls.Primitives.TextBoxBase || e.OriginalSource is PasswordBox) return;

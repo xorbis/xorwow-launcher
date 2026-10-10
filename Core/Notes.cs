@@ -11,10 +11,13 @@ namespace XorWoWLauncher.Core
         public string Title { get; set; }
         public string Body { get; set; }
         public bool HasBody => !string.IsNullOrEmpty(Body);
+        /// <summary>The longer write-up the detail view shows (client\release-details.md, simple markup: "## " headings, "- " bullets, **bold**).</summary>
+        public string Details { get; set; }
+        public bool HasDetails => !string.IsNullOrEmpty(Details);
         public string Kind { get; set; }   // "Server" or "Addons"
     }
 
-    /// <summary>notes.json: the realm's restarts with their reason, the XorWoW addon releases with their changes.</summary>
+    /// <summary>notes.json: the realm's restarts with their reason, the XorWoW addon releases with their changes, each with its optional details.</summary>
     public static class Notes
     {
         public static (List<NoteItem> server, List<NoteItem> addons) Parse(string json)
@@ -24,6 +27,7 @@ namespace XorWoWLauncher.Core
             {
                 Time = Time(Json.Str(o, "time")),
                 Title = Json.Str(o, "text"),
+                Details = Json.Str(o, "details"),
                 Kind = "Server",
             }).OrderByDescending(n => n.Time).ToList();
 
@@ -37,6 +41,7 @@ namespace XorWoWLauncher.Core
                     Time = Time(Json.Str(o, "time")),
                     Title = "XorWoW addons " + Json.Str(o, "version"),
                     Body = string.Join("\n", changes),
+                    Details = Json.Str(o, "details"),
                     Kind = "Addons",
                 };
             }).OrderByDescending(n => n.Time).ToList();

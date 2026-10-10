@@ -10,7 +10,7 @@ The launcher for **XorWoW**, a private World of Warcraft 3.3.5a (build 12340) re
   against a signed manifest and only changed files are downloaded.
 - **Realm addons** are kept up to date, and other addons can be browsed and installed from the
   [Warperia](https://warperia.com/) catalogue.
-- **Release notes** for the client, addons and server.
+- **Release notes** for the client, addons and server; click one for its full write-up.
 - **Game auto-login**: types the already-verified login into the game's login screen.
 - **Self-update** to newer launcher builds listed in the manifest.
 - **Extras**: an in-game radio helper (`--radio`), guild hall banner painting, and a Windows uninstall entry.
