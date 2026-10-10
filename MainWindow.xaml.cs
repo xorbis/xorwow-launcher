@@ -826,7 +826,7 @@ namespace XorWoWLauncher
             AddonEmpty.Text = "Loading…";
             try
             {
-                // A query searches the cached catalogue (by title first); browsing pages the API
+                // A query searches the catalogue (by title first); browsing pages through it
                 var query = SearchBox.Text.Trim();
                 if (query.Length > 0 && _catalogue == null && !_catalogueTried) { _catalogueTried = true; _catalogue = await _warperia.CatalogueAsync(ct); }
                 if (query.Length > 0 && _catalogue != null)

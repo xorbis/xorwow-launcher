@@ -20,35 +20,31 @@ namespace XorWoWLauncher.Core
     }
 
     /// <summary>
-    /// The 3.3.5a addon catalogue of warperia.com through its public WordPress REST API
-    /// (/wp-json/wp/v2/wotlk-addons): search, sort by installs or last update, look up by id for
-    /// update checks. Each addon carries its version, a zip and the folder names it installs.
+    /// The 3.3.5a addon catalogue of warperia.com: browse, search, sort by installs or last update,
+    /// look up by id for update checks. Each addon carries its version, a zip and the folder names it
+    /// installs. Warperia's REST API wants a key since 2026-10, which stays on the XorWoW server:
+    /// scripts\update-warperia-catalogue.ps1 fetches the whole catalogue every few hours and puts it
+    /// beside the manifest (warperia-catalogue.json), and the launcher reads that. The zips still come
+    /// straight from warperia.com, which needs no key.
     /// </summary>
     public sealed class Warperia
     {
-        const string Api = "https://warperia.com/wp-json/wp/v2/wotlk-addons";
-        const string Fields = "id,title,link,featured_image,addon_categories,author_name,custom_fields.summary,custom_fields.version," +
-                              "custom_fields.file,custom_fields.folder_list,custom_fields.installs,custom_fields.post_modified,custom_fields.title_toc";
+        const string CatalogueName = "warperia-catalogue.json";
+        static readonly TimeSpan Fresh = TimeSpan.FromHours(1);
         readonly Net _net;
+        List<AddonInfo> _catalogue;
+        DateTime _fetched;
 
         public Warperia(Net net) { _net = net; }
 
+        /// <summary>One page of 20 from the catalogue: a query as in <see cref="SearchCatalogue"/>, else all of it by installs or last update.</summary>
         public async Task<(List<AddonInfo> items, int pages)> SearchAsync(string query, string sort, int page, CancellationToken ct)
         {
-            var url = $"{Api}?per_page=20&page={page}&_fields={Fields}&orderby={(sort == "modified" ? "modified" : "installs")}";
-            if (!string.IsNullOrWhiteSpace(query)) url += "&search=" + Uri.EscapeDataString(query.Trim());
-            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
-            {
-                cts.CancelAfter(TimeSpan.FromSeconds(30));
-                using (var res = await _net.Http.GetAsync(url, cts.Token))
-                {
-                    if ((int)res.StatusCode == 400) return (new List<AddonInfo>(), 0);   // page past the end
-                    res.EnsureSuccessStatusCode();
-                    int.TryParse(res.Headers.TryGetValues("X-WP-TotalPages", out var v) ? v.FirstOrDefault() : "1", out var pages);
-                    var body = await res.Content.ReadAsStringAsync();
-                    return (Json.List(Json.Parse(body)).Select(Parse).ToList(), pages);
-                }
-            }
+            var all = await CatalogueAsync(ct) ?? throw new InvalidOperationException("the addon list could not be loaded");
+            var list = !string.IsNullOrWhiteSpace(query) ? SearchCatalogue(all, query, sort)
+                     : sort == "modified" ? all.OrderByDescending(a => DateTime.TryParse(a.Updated, out var d) ? d : DateTime.MinValue).ToList()
+                     : all.OrderByDescending(a => a.Installs).ToList();
+            return (list.Skip((page - 1) * 20).Take(20).ToList(), (list.Count + 19) / 20);
         }
 
         sealed class CatalogueEntry
@@ -77,60 +73,63 @@ namespace XorWoWLauncher.Core
         static string CatalogueFile => Path.Combine(AppPaths.Dir, "warperia-catalogue.json");
 
         /// <summary>
-        /// The whole 3.3.5a catalogue (id, title, version, zip, folder names) - what the API cannot search
-        /// by, a folder name - to recognise addons installed by hand. Fetched at most once a day (about
-        /// nine requests of 100), cached in %APPDATA%; a stale copy, or null, when Warperia does not answer.
+        /// The whole 3.3.5a catalogue (id, title, version, zip, folder names, browse details) from the
+        /// realm's file server, at most once an hour; copied to %APPDATA% so a launcher that cannot reach
+        /// the file server still recognises and updates addons from the last copy. Null when there is none.
         /// </summary>
         public async Task<List<AddonInfo>> CatalogueAsync(CancellationToken ct)
         {
-            CatalogueCache cache = null;
-            try { if (File.Exists(CatalogueFile)) cache = Json.Deserialize<CatalogueCache>(File.ReadAllText(CatalogueFile)); } catch { }
-            if (cache?.Format != 2) cache = null;
-            if (cache?.Items != null && DateTime.UtcNow - cache.Fetched < TimeSpan.FromDays(1)) return FromCache(cache);
+            if (_catalogue != null && DateTime.UtcNow - _fetched < Fresh) return _catalogue;
             try
             {
-                var items = new List<AddonInfo>();
-                for (int page = 1, pages = 1; page <= pages && page <= 30; page++)
+                var root = Json.Parse(System.Text.Encoding.UTF8.GetString(await _net.GetBytesAsync(CatalogueName, ct)));
+                if (Json.Long(root, "format") != 1) throw new InvalidDataException(CatalogueName + " has an unknown format");
+                var seen = new HashSet<long>();
+                // Only zips on warperia.com: the file is not signed like the manifest, so it cannot send the launcher elsewhere
+                var items = Json.Arr(root, "items").Select(Parse).Where(a => a.Id > 0 && seen.Add(a.Id) && FromWarperia(a)).ToList();
+                if (items.Count == 0) throw new InvalidDataException(CatalogueName + " lists no addon");
+                _catalogue = items;
+                _fetched = DateTime.UtcNow;
+                try
                 {
-                    using (var cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                    var cache = new CatalogueCache
                     {
-                        cts.CancelAfter(TimeSpan.FromSeconds(30));
-                        using (var res = await _net.Http.GetAsync($"{Api}?per_page=100&page={page}&_fields={Fields}&orderby=installs", cts.Token))
+                        Format = 2,
+                        Fetched = DateTime.UtcNow,
+                        Items = items.Select(a => new CatalogueEntry
                         {
-                            res.EnsureSuccessStatusCode();
-                            int.TryParse(res.Headers.TryGetValues("X-WP-TotalPages", out var v) ? v.FirstOrDefault() : "1", out pages);
-                            items.AddRange(Json.List(Json.Parse(await res.Content.ReadAsStringAsync())).Select(Parse));
-                        }
-                    }
+                            Id = a.Id, Title = a.Title, Version = a.Version, FileUrl = a.FileUrl, Icon = a.Icon, Link = a.Link, Folders = a.Folders,
+                            Summary = a.Summary, Author = a.Author, Updated = a.Updated, Categories = a.Categories, Installs = a.Installs,
+                        }).ToList(),
+                    };
+                    Directory.CreateDirectory(AppPaths.Dir);
+                    AtomicFile.WriteAllText(CatalogueFile, Json.Serialize(cache));
                 }
-                cache = new CatalogueCache
-                {
-                    Format = 2,
-                    Fetched = DateTime.UtcNow,
-                    Items = items.Select(a => new CatalogueEntry
-                    {
-                        Id = a.Id, Title = a.Title, Version = a.Version, FileUrl = a.FileUrl, Icon = a.Icon, Link = a.Link, Folders = a.Folders,
-                        Summary = a.Summary, Author = a.Author, Updated = a.Updated, Categories = a.Categories, Installs = a.Installs,
-                    }).ToList(),
-                };
-                Directory.CreateDirectory(AppPaths.Dir);
-                AtomicFile.WriteAllText(CatalogueFile, Json.Serialize(cache));
+                catch (Exception e) { Log.Write("warperia catalogue copy: " + e.Message); }
                 Log.Write($"warperia catalogue: {items.Count} addons");
                 return items;
             }
             catch (Exception e) when (!(e is OperationCanceledException))
             {
                 Log.Write("warperia catalogue: " + e.Message);
-                return cache?.Items != null ? FromCache(cache) : null;
+                if (_catalogue != null) return _catalogue;
+                CatalogueCache cache = null;
+                try { if (File.Exists(CatalogueFile)) cache = Json.Deserialize<CatalogueCache>(File.ReadAllText(CatalogueFile)); } catch { }
+                return cache?.Format == 2 && cache.Items != null ? FromCache(cache) : null;
             }
         }
+
+        static bool FromWarperia(AddonInfo a) =>
+            string.IsNullOrEmpty(a.FileUrl) ||
+            Uri.TryCreate(a.FileUrl, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps &&
+            (u.Host.Equals("warperia.com", StringComparison.OrdinalIgnoreCase) || u.Host.EndsWith(".warperia.com", StringComparison.OrdinalIgnoreCase));
 
         static List<AddonInfo> FromCache(CatalogueCache c) =>
             c.Items.Select(i => new AddonInfo
             {
                 Id = i.Id, Title = i.Title, Version = i.Version, FileUrl = i.FileUrl, Icon = i.Icon, Link = i.Link, Folders = i.Folders ?? new List<string>(),
                 Summary = i.Summary, Author = i.Author, Updated = i.Updated, Categories = i.Categories, Installs = i.Installs,
-            }).ToList();
+            }).Where(FromWarperia).ToList();
 
         /// <summary>
         /// Search the cached catalogue - Warperia's own search ranks words found anywhere in the
@@ -149,21 +148,12 @@ namespace XorWoWLauncher.Core
             return ordered.Take(100).ToList();
         }
 
+        /// <summary>The latest catalogue entries of these addons; one that left Warperia is simply missing (what is installed stays).</summary>
         public async Task<List<AddonInfo>> GetAsync(IEnumerable<long> ids, CancellationToken ct)
         {
-            // The collection ignores include=, so one request per addon (few, and only after an update check)
-            var result = new List<AddonInfo>();
-            foreach (var id in ids.Distinct())
-            {
-                try
-                {
-                    var body = System.Text.Encoding.UTF8.GetString(await _net.GetBytesAsync($"{Api}/{id}?_fields={Fields}", ct));
-                    var a = Parse(Json.Parse(body));
-                    if (a.Id == id) result.Add(a);
-                }
-                catch (HttpRequestException e) { Log.Write($"warperia addon {id}: {e.Message}"); }   // removed from Warperia: keep what is installed
-            }
-            return result;
+            var all = await CatalogueAsync(ct) ?? throw new InvalidOperationException("the addon list could not be loaded");
+            var want = new HashSet<long>(ids);
+            return all.Where(a => want.Contains(a.Id)).ToList();
         }
 
         static AddonInfo Parse(object o)
