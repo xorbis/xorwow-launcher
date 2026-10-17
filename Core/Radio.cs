@@ -14,8 +14,8 @@ using Forms = System.Windows.Forms;
 namespace XorWoWLauncher.Core
 {
     /// <summary>
-    /// The in-game radio (the XorWoW addon's Radio.lua): Everlook Broadcasting Co., Turtle WoW's
-    /// community station. The 3.3.5 client cannot play a network stream and an addon cannot reach
+    /// The in-game radio (the XorWoW addon's Radio.lua): Out of Bounds Entertainment, the old
+    /// Everlook Broadcasting Co. team (Turtle WoW's community station). The 3.3.5 client cannot play a network stream and an addon cannot reach
     /// another program, so the launcher plays it, in a small helper started beside the game at Play
     /// ("XorWoW.exe --radio &lt;game pid&gt;", no window) that ends with the game.
     ///
@@ -35,10 +35,11 @@ namespace XorWoWLauncher.Core
     public sealed class Radio
     {
         public const string Flag = "--radio";
-        const string StreamUrl = "https://radio.turtle-music.org/stream";
-        const string StatusUrl = "https://radio.turtle-music.org/status-json.xsl";
-        const string PageUrl = "https://turtlecraft.gg/radio";
-        const string Station = "Everlook Broadcasting Co.";
+        // turtle-music.org expired with Turtle WoW (2026-10); the same team streams on AzuraCast now
+        const string StreamUrl = "https://radio.outofbounds.live/listen/out_of_bounds/radio.mp3";
+        const string StatusUrl = "https://radio.outofbounds.live/listen/out_of_bounds/status-json.xsl";
+        const string PageUrl = "https://radio.outofbounds.live/public/out_of_bounds";
+        const string Station = "Out of Bounds Entertainment";
         static readonly TimeSpan ReadEvery = TimeSpan.FromMilliseconds(500);
         static readonly TimeSpan TitleEvery = TimeSpan.FromSeconds(20);
         static readonly TimeSpan StalledAfter = TimeSpan.FromSeconds(20);   // buffering this long: reconnect
