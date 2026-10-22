@@ -45,6 +45,8 @@ namespace XorWoWLauncher.Core
         public bool ManageXorWoWAddons { get; set; } = true;
         /// <summary>Keep WTF\Account\&lt;ACCOUNT&gt;\ in step with the realm's copy (Core\WtfSync.cs).</summary>
         public bool SyncAddonSettings { get; set; } = true;
+        /// <summary>Write a maximized 1920x1080 window into Config.wtf at each Play (MainWindow.PrepareGameConfig).</summary>
+        public bool FixVideoMode { get; set; }
         public string AddonSort { get; set; } = "installs";
 
         public string FilesBase => string.IsNullOrWhiteSpace(Files) ? DefaultFiles : Files.Trim();

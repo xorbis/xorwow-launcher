@@ -103,6 +103,7 @@ namespace XorWoWLauncher
             GameLoginBox.IsChecked = _settings.GameAutoLogin;
             ManageAddonsBox.IsChecked = _settings.ManageXorWoWAddons;
             SyncSettingsBox.IsChecked = _settings.SyncAddonSettings;
+            FixVideoBox.IsChecked = _settings.FixVideoMode;
             ServerBox.Text = _settings.AuthHost;
             AboutText.Text = "XorWoW Launcher " + App.Version;
             _settings.GameDir = ClientDir;
@@ -494,14 +495,16 @@ namespace XorWoWLauncher
             catch (Exception ex) when (!(ex is OperationCanceledException)) { Log.Write("notes: " + ex.Message); }
         }
 
-        // A release note card was clicked: the whole note in the detail view, its write-up then (addons) the change list
+        // A release note card was clicked: the whole note in the detail view, its write-up then (addons) the change list;
+        // a launcher note's summary is the write-up's first paragraph, so it only shows on its own
         void Note_Click(object sender, MouseButtonEventArgs e)
         {
             if (!((sender as FrameworkElement)?.DataContext is NoteItem n)) return;
-            NoteKind.Text = (n.Kind == "Server" ? "SERVER UPDATE" : "XORWOW ADDONS") + "   ·   " + n.When;
+            NoteKind.Text = (n.Kind == "Server" ? "SERVER UPDATE" : n.Kind == "Launcher" ? "XORWOW LAUNCHER" : "XORWOW ADDONS") + "   ·   " + n.When;
             NoteTitle.Text = n.Title;
             NoteBody.Children.Clear();
             if (n.HasDetails) RenderNoteMarkup(n.Details);
+            else if (n.Kind == "Launcher" && n.HasBody) NoteBody.Children.Add(NoteParagraph(n.Body));
             if (n.Kind == "Addons" && n.HasBody)
             {
                 if (n.HasDetails) NoteBody.Children.Add(NoteHeading("Changes"));
@@ -1010,6 +1013,12 @@ namespace XorWoWLauncher
             changed |= SetCVar(lines, "readEULA", "1", false);
             changed |= SetCVar(lines, "readTOS", "1", false);
             changed |= SetCVar(lines, "realmName", "XorWoW", false);
+            if (_settings.FixVideoMode)
+            {
+                changed |= SetCVar(lines, "gxWindow", "1", true);
+                changed |= SetCVar(lines, "gxMaximize", "1", true);
+                changed |= SetCVar(lines, "gxResolution", "1920x1080", true);
+            }
             if (changed) File.WriteAllLines(cfg, lines);
         }
 
@@ -1439,6 +1448,7 @@ namespace XorWoWLauncher
             _settings.CloseOnPlay = CloseOnPlayBox.IsChecked == true;
             _settings.ManageXorWoWAddons = ManageAddonsBox.IsChecked == true;
             _settings.GameAutoLogin = GameLoginBox.IsChecked == true;
+            _settings.FixVideoMode = FixVideoBox.IsChecked == true;
             var syncWasOn = _settings.SyncAddonSettings;
             _settings.SyncAddonSettings = SyncSettingsBox.IsChecked == true;
             if (_settings.SyncAddonSettings && !syncWasOn) StartAddonSync();

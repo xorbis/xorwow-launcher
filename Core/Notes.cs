@@ -14,13 +14,14 @@ namespace XorWoWLauncher.Core
         /// <summary>The longer write-up the detail view shows (client\release-details.md, simple markup: "## " headings, "- " bullets, **bold**).</summary>
         public string Details { get; set; }
         public bool HasDetails => !string.IsNullOrEmpty(Details);
-        public string Kind { get; set; }   // "Server" or "Addons"
+        public string Kind { get; set; }   // "Server", "Addons" or "Launcher"
     }
 
-    /// <summary>notes.json: the realm's restarts with their reason, the XorWoW addon releases with their changes, each with its optional details.</summary>
+    /// <summary>notes.json: the realm's restarts with their reason, the XorWoW addon releases with their changes, the launcher releases, each with its optional details.</summary>
     public static class Notes
     {
-        public static (List<NoteItem> server, List<NoteItem> addons) Parse(string json)
+        /// <summary>The server notes, and the client notes: addon and launcher releases together, newest first.</summary>
+        public static (List<NoteItem> server, List<NoteItem> client) Parse(string json)
         {
             var root = Json.Parse(json);
             var server = Json.Arr(root, "server").Select(o => new NoteItem
@@ -44,8 +45,17 @@ namespace XorWoWLauncher.Core
                     Details = Json.Str(o, "details"),
                     Kind = "Addons",
                 };
-            }).OrderByDescending(n => n.Time).ToList();
-            return (server, addons);
+            });
+
+            var launcher = Json.Arr(root, "launcher").Select(o => new NoteItem
+            {
+                Time = Time(Json.Str(o, "time")),
+                Title = "XorWoW Launcher " + Json.Str(o, "version"),
+                Body = Json.Str(o, "text"),
+                Details = Json.Str(o, "details"),
+                Kind = "Launcher",
+            });
+            return (server, addons.Concat(launcher).OrderByDescending(n => n.Time).ToList());
         }
 
         static DateTimeOffset Time(string s) => DateTimeOffset.TryParse(s, out var t) ? t : DateTimeOffset.MinValue;
