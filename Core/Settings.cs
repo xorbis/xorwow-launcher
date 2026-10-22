@@ -43,6 +43,8 @@ namespace XorWoWLauncher.Core
         public bool GameAutoLogin { get; set; } = true;
         public bool CloseOnPlay { get; set; }
         public bool ManageXorWoWAddons { get; set; } = true;
+        /// <summary>Keep WTF\Account\&lt;ACCOUNT&gt;\ in step with the realm's copy (Core\WtfSync.cs).</summary>
+        public bool SyncAddonSettings { get; set; } = true;
         public string AddonSort { get; set; } = "installs";
 
         public string FilesBase => string.IsNullOrWhiteSpace(Files) ? DefaultFiles : Files.Trim();

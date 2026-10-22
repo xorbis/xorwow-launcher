@@ -33,6 +33,14 @@ namespace XorWoWLauncher
         bool _usingSaved, _suppressPassEvent;
         string _gamePassword;   // verified at login; typed into the game's login screen at Play
         string _account = "";
+        byte[] _credential;    // SHA1(USER:PASS) of the logged-in account: the addon settings sync logs in with it too
+
+        // addon settings sync (Core\WtfSync.cs)
+        WtfSync _sync;
+        Process _game;          // the Wow.exe of this client folder, started at Play or found running
+        DispatcherTimer _syncTimer;
+        bool _closeAfterGame;   // "close at Play" with the sync on: hidden until the game closes and its settings are saved
+        bool _starting;
 
         // addons
         readonly ObservableCollection<AddonRow> _rows = new ObservableCollection<AddonRow>();
@@ -94,6 +102,7 @@ namespace XorWoWLauncher
             CloseOnPlayBox.IsChecked = _settings.CloseOnPlay;
             GameLoginBox.IsChecked = _settings.GameAutoLogin;
             ManageAddonsBox.IsChecked = _settings.ManageXorWoWAddons;
+            SyncSettingsBox.IsChecked = _settings.SyncAddonSettings;
             ServerBox.Text = _settings.AuthHost;
             AboutText.Text = "XorWoW Launcher " + App.Version;
             _settings.GameDir = ClientDir;
@@ -178,6 +187,7 @@ namespace XorWoWLauncher
                         _settings.Username = user;
                         _settings.SaveCredential(_settings.Remember ? credential : null);
                         _savedCredential = _settings.Remember ? credential : null;
+                        _credential = credential;
                         // The verified password, for the game's login screen: in memory for this session;
                         // saved (encrypted) only with Remember me and game auto-login both on
                         _gamePassword = typedPassword ?? _settings.LoadPassword();
@@ -228,11 +238,14 @@ namespace XorWoWLauncher
             FolderText.Text = OwnDir;
             if (_updateNote != null) ShowToast(char.ToUpper(_updateNote[0]) + _updateNote.Substring(1));
             _ = RunUpdatesAsync(false);
+            StartAddonSync();
         }
 
         void Logout_Click(object sender, RoutedEventArgs e)
         {
             _gamePassword = null;
+            StopAddonSync();
+            _credential = null;
             _cts.Cancel();
             _cts = new CancellationTokenSource();
             MainView.Visibility = Visibility.Collapsed;
@@ -664,11 +677,23 @@ namespace XorWoWLauncher
             Play_Click(PlayButton, new RoutedEventArgs());
         }
 
-        void Play_Click(object sender, RoutedEventArgs e)
+        async void Play_Click(object sender, RoutedEventArgs e)
         {
             var dir = _settings.GameDir;
             var exe = System.IO.Path.Combine(dir, "Wow.exe");
             if (!File.Exists(exe)) { Status("Wow.exe is missing - press \"Check for updates\".", Danger); return; }
+            if (_starting) return;
+
+            // A newer copy of the addon settings saved from another PC comes in before the game reads them
+            // (not when this folder's game already runs: it would write its own back over them)
+            if (_settings.SyncAddonSettings && _credential != null && FindRunningGame(dir) == null)
+            {
+                _starting = true;
+                Status("Syncing your addon settings…");
+                try { await SyncAddonSettingsAsync(false, TimeSpan.FromSeconds(20), wait: true); }
+                finally { _starting = false; }
+            }
+
             try { PrepareGameConfig(dir); } catch (Exception ex) { Log.Write("Config.wtf: " + ex.Message); }
             GuildBanners.Update(dir);   // the guild hall banners' textures (Data\Patch-Y.MPQ)
             Process wow;
@@ -679,11 +704,12 @@ namespace XorWoWLauncher
             }
             catch (Exception ex) { Status("Could not start the game: " + ex.Message, Danger); return; }
             Radio.StartBeside(wow);   // the addon's radio button, played by a helper that ends with the game
+            if (wow != null) WatchGame(wow);
             WindowState = WindowState.Minimized;
 
             var autoLogin = _settings.GameAutoLogin && !string.IsNullOrEmpty(_gamePassword) && wow != null;
             if (autoLogin && !GameLogin.Supported(exe)) { autoLogin = false; Log.Write("game login: not a 3.3.5a (12340) Wow.exe - the password is left to the player"); }
-            if (!autoLogin) { if (_settings.CloseOnPlay) Close(); return; }
+            if (!autoLogin) { CloseAfterPlay(); return; }
 
             // The launcher stays alive (minimized) until the password is in, then closes if asked to
             var password = _gamePassword;
@@ -691,8 +717,260 @@ namespace XorWoWLauncher
             _ = Task.Run(() => GameLogin.TypePasswordAsync(wow, password, CancellationToken.None)).ContinueWith(t =>
             {
                 Status(t.Result ? "In the game - have fun!" : "Log in at the game's login screen.", t.Result ? Ok : 0);
-                if (_settings.CloseOnPlay) Close();
+                CloseAfterPlay();
             }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        /// <summary>
+        /// "Close the launcher when the game starts". With the addon settings sync on it only hides
+        /// (no window, no taskbar button) and closes once the game has closed and its settings are saved.
+        /// </summary>
+        void CloseAfterPlay()
+        {
+            if (!_settings.CloseOnPlay) return;
+            if (_settings.SyncAddonSettings && _credential != null && _game != null)
+            {
+                _closeAfterGame = true;
+                Hide();
+                Log.Write("hidden until the game closes (addon settings sync)");
+                return;
+            }
+            Close();
+        }
+
+        // ================================================================ addon settings sync
+
+        /// <summary>After login: a sync, and the watch on a game of this folder that already runs (launcher restarted mid-game).</summary>
+        void StartAddonSync()
+        {
+            if (!_settings.SyncAddonSettings || _credential == null) return;
+            var running = FindRunningGame(_settings.GameDir);
+            if (running != null) WatchGame(running);
+            _ = SyncAddonSettingsAsync(running != null, TimeSpan.FromMinutes(2));
+        }
+
+        void StopAddonSync()
+        {
+            _syncTimer?.Stop();
+            _game = null;
+            _sync?.Dispose();
+            _sync = null;
+        }
+
+        readonly SemaphoreSlim _syncGate = new SemaphoreSlim(1, 1);
+
+        /// <summary>
+        /// One sync of the addon settings and of the installed addons' list; with the game closed, the
+        /// listed addons missing here are then installed from Warperia. <paramref name="wait"/>: wait
+        /// for a sync already running (Play) instead of skipping this one (the 2-minute timer).
+        /// </summary>
+        async Task<WtfSyncResult> SyncAddonSettingsAsync(bool gameRunning, TimeSpan timeout, bool wait = false)
+        {
+            if (!_settings.SyncAddonSettings || _credential == null || _account.Length == 0) return null;
+            if (!await _syncGate.WaitAsync(wait ? timeout : TimeSpan.Zero)) return WtfSyncResult.Of(WtfSyncOutcome.Busy, "a sync is already running");
+            try
+            {
+                if (_sync == null || _sync.Account != _account) { _sync?.Dispose(); _sync = new WtfSync(_settings.AuthHost, _account, _credential, _settings.GameDir); }
+                var state = CurrentState();   // null before the client is installed: settings only
+                var list = state == null ? null : new AddonListSync(_sync.Folder);
+                _sync.MergeAddonList = list == null ? (Func<byte[], bool>)null : list.MergeFrom;
+                WtfSyncResult r;
+                string installed = null;
+                using (var cts = new CancellationTokenSource(timeout))
+                {
+                    try
+                    {
+                        if (list != null)
+                        {
+                            var catalogue = await AddonCatalogueAsync(cts.Token);
+                            list.RecordLocalChanges(AddonListSync.LocalAddons(_settings.GameDir, state, Reserved(), catalogue), _sync.LoadState()?.Addons);
+                        }
+                        r = await _sync.SyncAsync(gameRunning, cts.Token);
+                        var through = r.Outcome == WtfSyncOutcome.Uploaded || r.Outcome == WtfSyncOutcome.UpToDate || r.Outcome == WtfSyncOutcome.Downloaded;
+                        if (list != null && through)
+                        {
+                            if (!gameRunning)
+                            {
+                                var removed = RemoveDroppedAddons(list, state);
+                                installed = await InstallMissingAddonsAsync(list, state);
+                                if (removed != null) installed = installed == null ? removed : removed + " " + installed;
+                            }
+                            var catalogue = await AddonCatalogueAsync(cts.Token);
+                            _sync.SaveAddonKeys(AddonListSync.LocalAddons(_settings.GameDir, state, Reserved(), catalogue).Keys);
+                        }
+                    }
+                    catch (OperationCanceledException) { r = WtfSyncResult.Of(WtfSyncOutcome.Failed, "the realm's sync service took too long"); }
+                    catch (Exception ex)
+                    {
+                        Log.Write("addon sync: " + ex);
+                        r = WtfSyncResult.Of(WtfSyncOutcome.Failed, ex.Message);
+                    }
+                }
+                if (r.Outcome != WtfSyncOutcome.Busy)
+                    SyncStatusText.Text = "Addon settings at " + DateTime.Now.ToString("HH:mm") + ": " + r.Message + "." + (installed == null ? "" : " " + installed);
+                if (installed != null) ShowToast(installed);
+                else if (r.Outcome == WtfSyncOutcome.Downloaded) ShowToast("Addon settings updated from the realm (saved on another PC)");
+                return r;
+            }
+            finally { _syncGate.Release(); }
+        }
+
+        readonly HashSet<string> _reportedUnavailable = new HashSet<string>();   // said once per session, not at every sync
+
+        async Task<IList<AddonInfo>> AddonCatalogueAsync(CancellationToken ct)
+        {
+            if (_catalogue != null) return _catalogue;
+            try { return _catalogue = await _warperia.CatalogueAsync(ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { Log.Write("addon sync, catalogue: " + ex.Message); return null; }
+        }
+
+        /// <summary>
+        /// The addons removed on another PC, removed here too; a line for the player, else null. One
+        /// Warperia does not have (it could not be put back) is zipped into addon-backups first (last 20).
+        /// </summary>
+        string RemoveDroppedAddons(AddonListSync list, GameState state)
+        {
+            var reserved = Reserved();
+            var gone = list.Removed(AddonListSync.LocalAddons(_settings.GameDir, state, reserved, _catalogue));
+            if (gone.Count == 0) return null;
+            var done = new List<string>();
+            foreach (var a in gone)
+            {
+                try
+                {
+                    var folders = a.Folders.Where(f => !reserved.Contains(f)).ToList();
+                    if (a.Id == 0) BackupAddon(a.Title, folders);
+                    state = CurrentState() ?? state;
+                    Warperia.Uninstall(new InstalledAddon { Id = -1, Title = a.Title, Folders = folders }, _settings.GameDir,
+                                       state.Addons.Where(i => !i.Folders.Any(folders.Contains)), reserved);
+                    if (state.Addons.RemoveAll(i => i.Folders.Any(folders.Contains)) > 0) state.Save();
+                    done.Add(a.Title);
+                }
+                catch (Exception ex) { Log.Write($"addon sync, remove {a.Title}: {ex.Message}"); }
+            }
+            if (done.Count == 0) return null;
+            if (NavAddons.IsChecked == true && TabInstalled.IsChecked == true) ShowInstalled();
+            return "Removed as on your other PC: " + string.Join(", ", done) + ".";
+        }
+
+        static void BackupAddon(string title, List<string> folders)
+        {
+            var addOns = System.IO.Path.Combine(ClientDir, "Interface", "AddOns");
+            var dir = System.IO.Path.Combine(AppPaths.Dir, "addon-backups");
+            Directory.CreateDirectory(dir);
+            var safe = new string(title.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
+            using (var zip = System.IO.Compression.ZipFile.Open(System.IO.Path.Combine(dir, safe + "-" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff") + ".zip"), System.IO.Compression.ZipArchiveMode.Create))
+                foreach (var f in folders)
+                {
+                    var root = System.IO.Path.Combine(addOns, f);
+                    if (!Directory.Exists(root)) continue;
+                    foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                        System.IO.Compression.ZipFileExtensions.CreateEntryFromFile(zip, file, f + "/" + file.Substring(root.Length + 1).Replace('\\', '/'));
+                }
+            foreach (var old in new DirectoryInfo(dir).GetFiles("*.zip").OrderByDescending(x => x.LastWriteTimeUtc).Skip(20))
+                try { old.Delete(); } catch { }
+        }
+
+        /// <summary>The listed addons this PC lacks, from Warperia; a line for the player when something happened, else null.</summary>
+        async Task<string> InstallMissingAddonsAsync(AddonListSync list, GameState state)
+        {
+            var reserved = Reserved();
+            var catalogue = await AddonCatalogueAsync(CancellationToken.None);
+            var missing = list.Missing(AddonListSync.LocalAddons(_settings.GameDir, state, reserved, catalogue), _settings.GameDir)
+                              .Where(m => !m.Folders.Any(reserved.Contains)).ToList();
+            if (missing.Count == 0) return null;
+
+            var done = new List<string>(); var unavailable = new List<string>(); var failed = new List<string>();
+            var infos = missing.Any(m => m.Id > 0) ? await _warperia.GetAsync(missing.Where(m => m.Id > 0).Select(m => m.Id), CancellationToken.None) : new List<AddonInfo>();
+            foreach (var m in missing)
+            {
+                var info = infos.FirstOrDefault(i => i.Id == m.Id);
+                if (info == null || string.IsNullOrEmpty(info.FileUrl)) { unavailable.Add(m.Title); continue; }
+                Status($"Installing {info.Title} (it is on your other PC)…");
+                try
+                {
+                    using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
+                    {
+                        var folders = await _warperia.InstallAsync(info, _settings.GameDir, reserved, cts.Token);
+                        state = CurrentState() ?? state;   // an update run may have reloaded it meanwhile
+                        state.Addons.RemoveAll(a => a.Id == info.Id);
+                        state.Addons.Add(new InstalledAddon
+                        {
+                            Id = info.Id, Title = info.Title, Version = info.Version, Folders = folders,
+                            Icon = info.Icon, Link = info.Link, InstalledAt = DateTime.Now.ToString("s"),
+                        });
+                        state.Save();
+                        done.Add(info.Title);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Write($"addon sync, install {info.Title}: {ex.Message}");
+                    failed.Add(info.Title);
+                }
+            }
+            unavailable = unavailable.Where(_reportedUnavailable.Add).ToList();
+            if (unavailable.Count > 0) Log.Write("addon sync: not on Warperia, to install by hand: " + string.Join(", ", unavailable));
+            var parts = new List<string>();
+            if (done.Count > 0) parts.Add("Installed from your other PC: " + string.Join(", ", done) + ".");
+            if (failed.Count > 0) parts.Add("Could not install " + string.Join(", ", failed) + " (tried again next time).");
+            if (unavailable.Count > 0) parts.Add("Not on Warperia, install by hand: " + string.Join(", ", unavailable) + ".");
+            if (done.Count > 0) Status(done.Count + " addon" + (done.Count > 1 ? "s" : "") + " installed from your other PC.", Ok);
+            else if (failed.Count > 0) Status("Could not install " + string.Join(", ", failed) + ".", Warn);
+            if (done.Count > 0 && NavAddons.IsChecked == true && TabInstalled.IsChecked == true) ShowInstalled();
+            return parts.Count == 0 ? null : string.Join(" ", parts);
+        }
+
+        void WatchGame(Process wow)
+        {
+            _game = wow;
+            _syncTimer?.Stop();
+            if (!_settings.SyncAddonSettings) return;
+            // Saved while playing too (the game writes them at each logout and /reload), so a crash loses little
+            _syncTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+            _syncTimer.Tick += async (s, e) => { if (_game == wow && !wow.HasExited) await SyncAddonSettingsAsync(true, TimeSpan.FromMinutes(1)); };
+            _syncTimer.Start();
+            try
+            {
+                wow.Exited += (s, e) => Dispatcher.BeginInvoke(new Action(() => OnGameExited(wow)));
+                wow.EnableRaisingEvents = true;   // after the handler: on a game already gone it raises Exited at once
+            }
+            catch (Exception ex) { Log.Write("watching the game: " + ex.Message); }
+        }
+
+        async void OnGameExited(Process wow)
+        {
+            if (_game != wow) return;
+            _game = null;
+            _syncTimer?.Stop();
+            Log.Write("game closed");
+            if (_settings.SyncAddonSettings && _credential != null)
+            {
+                await Task.Delay(2000);
+                // A periodic sync may still be running: wait for it, then save what the game wrote on its way out
+                for (var i = 0; i < 60; i++)
+                {
+                    var r = await SyncAddonSettingsAsync(false, TimeSpan.FromMinutes(2));
+                    if (r == null || r.Outcome != WtfSyncOutcome.Busy) break;
+                    await Task.Delay(1000);
+                }
+            }
+            if (_closeAfterGame) Close();
+        }
+
+        /// <summary>The Wow.exe of this client folder when it runs, else null.</summary>
+        static Process FindRunningGame(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return null;
+            var exe = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, "Wow.exe"));
+            foreach (var p in Process.GetProcessesByName("Wow"))
+            {
+                try { if (string.Equals(p.MainModule.FileName, exe, StringComparison.OrdinalIgnoreCase)) return p; }
+                catch { }
+                p.Dispose();
+            }
+            return null;
         }
 
         /// <summary>
@@ -1161,6 +1439,10 @@ namespace XorWoWLauncher
             _settings.CloseOnPlay = CloseOnPlayBox.IsChecked == true;
             _settings.ManageXorWoWAddons = ManageAddonsBox.IsChecked == true;
             _settings.GameAutoLogin = GameLoginBox.IsChecked == true;
+            var syncWasOn = _settings.SyncAddonSettings;
+            _settings.SyncAddonSettings = SyncSettingsBox.IsChecked == true;
+            if (_settings.SyncAddonSettings && !syncWasOn) StartAddonSync();
+            else if (!_settings.SyncAddonSettings && syncWasOn) StopAddonSync();
             if (!_settings.GameAutoLogin) _settings.SavePassword(null);   // no longer needed: not kept
             else if (_settings.Remember && !string.IsNullOrEmpty(_gamePassword)) _settings.SavePassword(_gamePassword);
             _settings.Save();

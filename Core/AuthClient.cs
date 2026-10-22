@@ -95,25 +95,8 @@ namespace XorWoWLauncher.Core
                     if (needsToken && string.IsNullOrWhiteSpace(token))
                         return LoginResult.Of(LoginStatus.TokenRequired, "This account uses an authenticator: enter its code.");
 
-                    // SRP6, numbers little-endian as on the wire
-                    var n = Num(N); var gg = Num(g); var b = Num(B);
-                    if (b % n == 0) return LoginResult.Of(LoginStatus.Error, "Bad answer from the realm.");
-                    byte[] A, M1, K;
-                    using (var sha = SHA1.Create())
-                    {
-                        var x = Num(sha.ComputeHash(Concat(salt, credentialHash)));
-                        var aBytes = new byte[32];
-                        using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(aBytes);
-                        var a = Num(aBytes);
-                        A = Bytes(BigInteger.ModPow(gg, a, n), 32);
-                        var u = Num(sha.ComputeHash(Concat(A, B)));
-                        var baseS = ((b - K3 * BigInteger.ModPow(gg, x, n)) % n + n) % n;
-                        var S = Bytes(BigInteger.ModPow(baseS, a + u * x, n), 32);
-                        K = Interleave(S);
-                        var hN = sha.ComputeHash(N); var hg = sha.ComputeHash(g);
-                        var ng = hN.Select((v, i) => (byte)(v ^ hg[i])).ToArray();
-                        M1 = sha.ComputeHash(Concat(ng, sha.ComputeHash(acc), salt, A, B, K));
-                    }
+                    if (!Srp6Proof(acc, credentialHash, B, g, N, salt, out var A, out var M1, out var K))
+                        return LoginResult.Of(LoginStatus.Error, "Bad answer from the realm.");
 
                     // AUTH_LOGON_PROOF
                     var pr = new MemoryStream();
@@ -135,9 +118,8 @@ namespace XorWoWLauncher.Core
                     if (res[0] != 0x01) return LoginResult.Of(LoginStatus.Error, "Unexpected answer from the realm.");
                     if (res[1] != 0x00) return Fail(res[1]);
                     var M2 = await ReadExact(net, 20, ct);
-                    using (var sha = SHA1.Create())
-                        if (!sha.ComputeHash(Concat(A, M1, K)).SequenceEqual(M2))
-                            return LoginResult.Of(LoginStatus.Error, "The realm's answer did not check out.");
+                    if (!ServerProof(A, M1, K).SequenceEqual(M2))
+                        return LoginResult.Of(LoginStatus.Error, "The realm's answer did not check out.");
                     return LoginResult.Of(LoginStatus.Ok, "Logged in.");
                 }
             }
@@ -160,6 +142,41 @@ namespace XorWoWLauncher.Core
                 case 0x19: return LoginResult.Of(LoginStatus.Locked, "This account is locked to another IP address or country.");
                 default: return LoginResult.Of(LoginStatus.Error, "The realm refused the login (code " + code + ").");
             }
+        }
+
+        /// <summary>
+        /// The client half of SRP6 (numbers little-endian as on the wire): A, the proof M1 and the
+        /// session key K for the server's B, g, N and salt. False for a B the server must never send.
+        /// Shared with the WTF sync's login (WtfSync.cs), which runs the same exchange over HTTP.
+        /// </summary>
+        public static bool Srp6Proof(byte[] acc, byte[] credentialHash, byte[] B, byte[] g, byte[] N, byte[] salt,
+                                     out byte[] A, out byte[] M1, out byte[] K)
+        {
+            A = M1 = K = null;
+            var n = Num(N); var gg = Num(g); var b = Num(B);
+            if (b % n == 0) return false;
+            using (var sha = SHA1.Create())
+            {
+                var x = Num(sha.ComputeHash(Concat(salt, credentialHash)));
+                var aBytes = new byte[32];
+                using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(aBytes);
+                var a = Num(aBytes);
+                A = Bytes(BigInteger.ModPow(gg, a, n), 32);
+                var u = Num(sha.ComputeHash(Concat(A, B)));
+                var baseS = ((b - K3 * BigInteger.ModPow(gg, x, n)) % n + n) % n;
+                var S = Bytes(BigInteger.ModPow(baseS, a + u * x, n), 32);
+                K = Interleave(S);
+                var hN = sha.ComputeHash(N); var hg = sha.ComputeHash(g);
+                var ng = hN.Select((v, i) => (byte)(v ^ hg[i])).ToArray();
+                M1 = sha.ComputeHash(Concat(ng, sha.ComputeHash(acc), salt, A, B, K));
+            }
+            return true;
+        }
+
+        /// <summary>M2, what the server answers when it accepted M1.</summary>
+        public static byte[] ServerProof(byte[] A, byte[] M1, byte[] K)
+        {
+            using (var sha = SHA1.Create()) return sha.ComputeHash(Concat(A, M1, K));
         }
 
         // AzerothCore's SRP6::SHA1Interleave, byte for byte

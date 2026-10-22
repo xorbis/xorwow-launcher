@@ -12,6 +12,15 @@ The launcher for **XorWoW**, a private World of Warcraft 3.3.5a (build 12340) re
   [Warperia](https://warperia.com/) catalogue.
 - **Release notes** for the client, addons and server; click one for its full write-up.
 - **Game auto-login**: types the already-verified login into the game's login screen.
+- **Addon settings sync**: the account's `WTF\Account\<NAME>\` folder is kept the same on every PC
+  through the realm (port 3725, `docker/wtf-sync` in the realm's repository). It is uploaded when it
+  changed, every 2 minutes while playing and when the game closes. A newer copy is downloaded before
+  Play, never while the game runs. The realm keeps the last 10 uploads. Before a download replaces the
+  folder, a zip of it goes to `%APPDATA%\XorWoW Launcher\wtf-backups`. The service runs the same SRP6
+  exchange as the authserver and the requests are HMAC-signed with its session key, so the password never travels.
+  The installed addons travel with it (`launcher-addons.json` in that folder, merged addon by addon). Addons
+  missing on a PC are installed from Warperia, and an addon removed on one PC is removed from the others (one
+  Warperia doesn't have is zipped into `addon-backups\` first).
 - **Self-update** to newer launcher builds listed in the manifest.
 - **Extras**: an in-game radio helper (`--radio`), guild hall banner painting, and a Windows uninstall entry.
 
@@ -40,7 +49,8 @@ XorWoW's downloads. To use the launcher for another realm, change that URL, repl
 
 ## Runtime data
 
-Settings, the log and per-game-folder state are stored in `%APPDATA%\XorWoW Launcher\`.
+Settings, the log, per-game-folder state, the addon settings sync state (`wtf-sync.json`) and its
+backups (`wtf-backups\`) are stored in `%APPDATA%\XorWoW Launcher\`.
 
 ## License
 
