@@ -338,12 +338,20 @@
 
                             <Border Style="{StaticResource Card}" Margin="0,0,0,12">
                                 <StackPanel>
+                                    <TextBlock Text="Video options" Style="{StaticResource H2}" Margin="0,0,0,8" />
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="Fix video options" Click="FixVideo_Click" Margin="10,0,0,0" VerticalAlignment="Center" />
+                                        <TextBlock Style="{StaticResource Dim}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" Text="Game opens off screen, black or at the wrong size? This sets it once to a maximized window at 1920x1080 (WTF\Config.wtf). Change it again in the game's video options as you like." />
+                                    </DockPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                                <StackPanel>
                                     <TextBlock Text="Launcher" Style="{StaticResource H2}" Margin="0,0,0,10" />
                                     <CheckBox x:Name="GameLoginBox" Content="Log me into the game at Play (types the password at the game's login screen)" Margin="0,0,0,4" Click="SettingBox_Click" />
                                     <TextBlock Style="{StaticResource Dim}" FontSize="11" Margin="27,0,0,12" Text="With Remember me, this keeps your password encrypted for your Windows account, since the game needs the password itself. Off: it is not kept." />
                                     <CheckBox x:Name="CloseOnPlayBox" Content="Close the launcher when the game starts (otherwise it is minimized)" Margin="0,0,0,10" Click="SettingBox_Click" />
-                                    <CheckBox x:Name="FixVideoBox" Content="Fix the game's video mode at Play: maximized window, 1920x1080" Margin="0,0,0,4" Click="SettingBox_Click" />
-                                    <TextBlock Style="{StaticResource Dim}" FontSize="11" Margin="27,0,0,12" TextWrapping="Wrap" Text="Writes gxWindow 1, gxMaximize 1 and gxResolution 1920x1080 into WTF\Config.wtf before each start, whatever the game's video options last saved." />
                                     <CheckBox x:Name="ManageAddonsBox" Content="Keep the XorWoW addons (XorWoW, HuntsUI, Transmog, Pawn) at the realm's release" Margin="0,0,0,10" Click="SettingBox_Click" />
                                     <CheckBox x:Name="SyncSettingsBox" Content="Sync my addon settings with the realm (same setup on every PC)" Margin="0,0,0,4" Click="SettingBox_Click" />
                                     <TextBlock x:Name="SyncStatusText" Style="{StaticResource Dim}" FontSize="11" Margin="27,0,0,0" TextWrapping="Wrap" Text="Your WTF\Account folder: saved to the realm when it changes, fetched when another PC saved a newer one." />

@@ -103,7 +103,6 @@ namespace XorWoWLauncher
             GameLoginBox.IsChecked = _settings.GameAutoLogin;
             ManageAddonsBox.IsChecked = _settings.ManageXorWoWAddons;
             SyncSettingsBox.IsChecked = _settings.SyncAddonSettings;
-            FixVideoBox.IsChecked = _settings.FixVideoMode;
             ServerBox.Text = _settings.AuthHost;
             AboutText.Text = "XorWoW Launcher " + App.Version;
             _settings.GameDir = ClientDir;
@@ -1013,13 +1012,36 @@ namespace XorWoWLauncher
             changed |= SetCVar(lines, "readEULA", "1", false);
             changed |= SetCVar(lines, "readTOS", "1", false);
             changed |= SetCVar(lines, "realmName", "XorWoW", false);
-            if (_settings.FixVideoMode)
+            if (changed) File.WriteAllLines(cfg, lines);
+        }
+
+        // One-time repair: a maximized 1920x1080 window in Config.wtf; the game's own video options can change it after
+        void FixVideo_Click(object sender, RoutedEventArgs e)
+        {
+            var dir = _settings.GameDir;
+            if (FindRunningGame(dir) != null)
             {
-                changed |= SetCVar(lines, "gxWindow", "1", true);
+                ShowToast("Close the game first: it writes its own video options back when it exits.");
+                return;
+            }
+            try
+            {
+                var wtf = System.IO.Path.Combine(dir, "WTF");
+                Directory.CreateDirectory(wtf);
+                var cfg = System.IO.Path.Combine(wtf, "Config.wtf");
+                var lines = File.Exists(cfg) ? File.ReadAllLines(cfg).ToList() : new List<string>();
+                var changed = SetCVar(lines, "gxWindow", "1", true);
                 changed |= SetCVar(lines, "gxMaximize", "1", true);
                 changed |= SetCVar(lines, "gxResolution", "1920x1080", true);
+                if (changed) File.WriteAllLines(cfg, lines);
+                Log.Write("video options reset to a maximized 1920x1080 window");
+                ShowToast("Video options fixed: maximized window, 1920x1080.");
             }
-            if (changed) File.WriteAllLines(cfg, lines);
+            catch (Exception ex)
+            {
+                Log.Write("fixing the video options: " + ex.Message);
+                ShowToast("Could not fix the video options: " + ex.Message);
+            }
         }
 
         static bool SetCVar(List<string> lines, string name, string value, bool overwrite)
@@ -1448,7 +1470,6 @@ namespace XorWoWLauncher
             _settings.CloseOnPlay = CloseOnPlayBox.IsChecked == true;
             _settings.ManageXorWoWAddons = ManageAddonsBox.IsChecked == true;
             _settings.GameAutoLogin = GameLoginBox.IsChecked == true;
-            _settings.FixVideoMode = FixVideoBox.IsChecked == true;
             var syncWasOn = _settings.SyncAddonSettings;
             _settings.SyncAddonSettings = SyncSettingsBox.IsChecked == true;
             if (_settings.SyncAddonSettings && !syncWasOn) StartAddonSync();
